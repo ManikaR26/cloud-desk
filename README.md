@@ -1,294 +1,660 @@
-# CloudDesk — Cloud-Based Service Request Management
+# CloudDesk — Automated Cloud Service Request Management
 
-CloudDesk is a Flask-based service desk application built as a hands-on cloud engineering portfolio project. It provides a central workspace for raising service requests, assigning responsibility, tracking progress and recording communication.
+CloudDesk is a cloud-based service request management application developed using Python, Flask, SQLAlchemy, Terraform, and AWS.
 
-The application runs locally with SQLite and includes Terraform configuration and deployment scripts for hosting on AWS EC2 with a private RDS MySQL database.
+The platform allows employees to submit service requests and administrators to review, assign, and approve them. For AWS VPC requests, administrator approval automatically triggers Terraform to provision cloud infrastructure.
 
-**Tech stack:** Python · Flask · SQLAlchemy · SQLite/MySQL · Docker · Terraform · AWS
+The application tracks provisioning status and stores the AWS-generated VPC ID.
 
-**Start here:** [Local setup](docs/LOCAL_SETUP.md) · [AWS deployment](docs/AWS_DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) · [Backup and recovery](docs/BACKUP_RECOVERY.md)
+> **Project Status:** Successfully tested automatic AWS VPC provisioning in the Asia Pacific (Sydney) Region using Terraform.
 
-> **Project status:** The application passed 12 local automated tests. AWS deployment, live RDS integration, Docker execution and cloud recovery remain to be validated.
+---
+
+## Tech Stack
+
+| Category | Technologies |
+|----------|--------------|
+| Programming Language | Python |
+| Backend | Flask |
+| Database | SQLite |
+| ORM | SQLAlchemy |
+| Frontend | HTML, CSS, Jinja2 |
+| Infrastructure as Code | Terraform |
+| Cloud Platform | Amazon Web Services (AWS) |
+| AWS Services | VPC, Subnets, Route Tables, IAM |
+| Authentication | Flask-Login, Flask-WTF |
+| Testing | Pytest |
+| Development Tools | VS Code, Git, GitHub, AWS CLI |
+
+Additional infrastructure configurations are available for EC2, RDS MySQL, CloudWatch, and SNS.
+
+These configurations are separate from the successfully tested automated VPC provisioning workflow.
+
+---
 
 ## Project Overview
 
-Internal service requests often become scattered across emails, messages and spreadsheets. CloudDesk organizes each request into a ticket with a clear owner, priority, status, conversation and activity history.
+In many organizations, employees request IT services or cloud infrastructure through emails, messages, or manual ticketing systems.
 
-Example requests include:
-- VPN and software access.
-- Laptop maintenance.
-- Software installation.
-- Network connectivity issues.
+These processes can become difficult to track and may require administrators to manually create infrastructure resources.
 
-Requesters can create and track their own tickets. Administrators can review all requests, assign tickets to administrators and update their status.
+CloudDesk addresses this problem by combining a service request management system with automated AWS infrastructure provisioning.
 
-## Features
+### Objectives
 
-- **Authentication:** Registration, login and hashed passwords.
-- **Role-based access:** Requesters access their own tickets; administrators manage all tickets.
-- **Ticket management:** Create requests with a title, description, category and priority.
-- **Assignment and status:** Assign administrators and track Open, In Progress, Resolved and Closed tickets.
-- **Comments and history:** Keep conversations and timestamped activity records with each ticket.
-- **Dashboard:** View ticket counts and recent activity within the user's access scope.
-- **Search and reporting:** Search, filter, paginate and export tickets to CSV.
-- **Application protection:** CSRF protection, input validation, login throttling and security headers.
-- **Concurrent updates:** Optimistic locking prevents stale administrative updates from silently overwriting newer changes.
-- **Health checks:** Separate application liveness and database readiness endpoints.
-- **Deployment support:** Docker configuration, AWS infrastructure and installation scripts.
-- **Test automation:** GitHub Actions workflow for running Python tests.
+- Centralize employee service requests.
+- Implement role-based access for employees and administrators.
+- Automate request assignment and status tracking.
+- Enable administrator-approved AWS resource provisioning.
+- Integrate Terraform with a Flask application.
+- Track provisioning results and AWS resource identifiers.
+- Reduce manual infrastructure provisioning steps.
 
-## Architecture
+---
 
-### AWS Deployment Design
+## Key Features
 
-The following diagram shows the intended AWS deployment defined by the Terraform configuration and deployment scripts.
+### 1. User Authentication
+
+- Employee registration and login.
+- Administrator login.
+- Password hashing.
+- Session management.
+- Role-based access control.
+- CSRF protection.
+
+### 2. Service Request Management
+
+Employees can:
+
+- Create new service requests.
+- Select request categories.
+- Set request priorities.
+- View their submitted tickets.
+- Track request statuses.
+- Add comments and view activity history.
+
+Administrators can:
+
+- View all service requests.
+- Assign requests to administrators.
+- Update priorities and statuses.
+- Review request histories.
+- Approve AWS infrastructure requests.
+- Monitor infrastructure provisioning.
+
+### 3. Automated AWS VPC Provisioning
+
+CloudDesk integrates Terraform into its administrator approval workflow.
+
+When an employee submits an AWS VPC request:
+
+1. Flask validates the request.
+2. SQLAlchemy stores the request in SQLite.
+3. The administrator reviews the request.
+4. The administrator approves the requested infrastructure.
+5. Flask creates a Terraform provisioning job.
+6. Terraform generates an infrastructure execution plan.
+7. Terraform communicates with AWS using the AWS Provider.
+8. AWS provisions the requested VPC and networking resources.
+9. CloudDesk stores the AWS-generated VPC ID.
+10. The provisioning status is updated in the dashboard.
+
+### 4. Provisioning Modes
+
+CloudDesk supports two provisioning modes.
+
+#### Preview Mode
+
+```env
+PROVISIONING_MODE=preview
+```
+
+- Generates Terraform configuration files.
+- Does not create AWS resources.
+- Allows administrators to review the infrastructure configuration.
+- Displays the status `Preview Ready`.
+
+#### AWS Live Mode
+
+```env
+PROVISIONING_MODE=aws
+PROVISIONING_REGION=ap-southeast-2
+AUTO_RUN_PROVISIONING=true
+ENABLE_AWS_PROVISIONING=I_UNDERSTAND_AWS_CHARGES
+```
+
+- Executes Terraform after administrator approval.
+- Creates actual AWS infrastructure.
+- Tracks provisioning execution.
+- Records the AWS VPC ID.
+- Displays success or failure status.
+
+Live AWS provisioning requires valid AWS credentials and appropriate permissions.
+
+---
+
+## System Architecture
 
 ```mermaid
 flowchart TD
-    Browser["Browser / allowed client IP"]
-    Operator["Administrator / allowed client IP"]
-
-    subgraph AWS["AWS Cloud"]
-        subgraph VPC["VPC"]
-            IGW["Internet gateway"]
-
-            subgraph Public["Public application subnet"]
-                EC2["EC2 instance"]
-                Nginx["nginx / HTTPS termination"]
-                Flask["Gunicorn + Flask"]
-                Agent["CloudWatch logging agent"]
-            end
-
-            subgraph Private["Private database subnets"]
-                RDS["RDS MySQL / single-AZ"]
-            end
-        end
-
-        Logs["CloudWatch Logs"]
-        Alarms["CloudWatch alarms"]
-        SNS["SNS email notifications"]
-        Backups["RDS backups and snapshots"]
-    end
-
-    Browser -->|HTTPS 443| IGW
-    IGW -->|HTTPS| Nginx
-    Operator -->|SSH 22 through internet gateway| EC2
-    EC2 -.->|Hosts| Nginx
-    Nginx -->|localhost 8000| Flask
-    Flask -->|Verified TLS / port 3306| RDS
-    Flask -->|Log files| Agent
-    Agent --> Logs
-    EC2 -->|CPU and status metrics| Alarms
-    Alarms --> SNS
-    RDS --> Backups
+    A[Employee] --> B[CloudDesk Web Application]
+    B --> C[Flask Backend]
+    C --> D[(SQLite Database)]
+    D --> E[Administrator Dashboard]
+    E --> F{Admin Approval}
+    F -->|Rejected| G[Request Not Provisioned]
+    F -->|Approved| H[Provisioning Job]
+    H --> I[Terraform Configuration]
+    I --> J{Execution Mode}
+    J -->|Preview| K[Generate Terraform Files]
+    J -->|AWS| L[Terraform AWS Provider]
+    L --> M[AWS Cloud]
+    M --> N[VPC and Private Subnets]
+    N --> O[Store AWS Resource ID]
+    O --> P[Update CloudDesk Dashboard]
 ```
 
-### How the Components Work Together
+### Component Responsibilities
 
-1. The user accesses the application through HTTPS.
-2. nginx terminates HTTPS and forwards requests to Gunicorn on the EC2 instance.
-3. Flask handles authentication, authorization and ticket workflows.
-4. SQLAlchemy reads and writes application data in RDS MySQL.
-5. The CloudWatch agent forwards application and server logs.
-6. CloudWatch alarms send infrastructure alerts through SNS.
-7. RDS backups and snapshots support database recovery.
+| Component | Responsibility |
+|-----------|----------------|
+| Frontend | Employee and administrator interface |
+| Flask | Handles requests, authentication, approvals, and provisioning workflows |
+| SQLAlchemy | Performs database operations through Python models |
+| SQLite | Stores users, service requests, statuses, and provisioning records |
+| Terraform | Defines and provisions cloud infrastructure |
+| AWS Provider | Connects Terraform to AWS APIs |
+| AWS VPC | Provides an isolated virtual network |
+| AWS CLI | Authenticates and verifies AWS access |
 
-### Network and Access Controls
+---
 
-- EC2 accepts inbound HTTPS and SSH only from the configured client IPv4 `/32`.
-- Gunicorn listens on `127.0.0.1:8000`, behind nginx.
-- RDS is not publicly accessible.
-- The database security group accepts MySQL traffic only from the application security group.
-- The private database subnets have no internet route.
-- Database connections use verified TLS.
-- The EC2 instance role provides permissions for publishing project logs.
+## AWS Infrastructure Provisioned
 
-The database subnet group spans two availability zones, but the RDS instance is **single-AZ**. This configuration does not provide Multi-AZ failover, load balancing or autoscaling.
+Each approved VPC request creates the following Terraform-managed resources:
 
-### Deployment Modes
+| Resource | Quantity |
+|----------|----------|
+| AWS VPC | 1 |
+| Private Subnets | 2 |
+| Private Route Table | 1 |
+| Route Table Associations | 2 |
+| Total | 6 |
 
-| Mode | Application Runtime | Database |
-| --- | --- | --- |
-| Local development | Flask development server | SQLite |
-| Local Docker | Gunicorn inside a container | SQLite in a named volume |
-| AWS deployment design | nginx and Gunicorn on EC2 | Private RDS MySQL |
+### Example VPC Configuration
 
-The AWS installation scripts run the Python application directly on EC2 under systemd. Docker is provided as an alternative local execution workflow.
+```text
+AWS Region: ap-southeast-2
 
-## Application Workflow
+VPC CIDR:
+10.80.0.0/16
 
-1. A requester registers and signs in.
-2. The requester creates a ticket with the issue details.
-3. An administrator reviews the ticket and assigns responsibility.
-4. The administrator updates its priority or status.
-5. Both users add comments to document progress.
-6. The administrator marks the ticket Resolved or Closed.
-7. The requester can review the activity history and export their tickets.
+Private Subnet 1:
+10.80.1.0/24
+Availability Zone: ap-southeast-2a
 
-Authorization is enforced on the server for ticket pages, comments and exports.
-
-## Quick Local Start
-
-### Requirements
-
-- Python 3.12 recommended.
-- Git or an extracted copy of the project.
-- A terminal such as Windows PowerShell.
-
-No AWS account is required to run the application locally.
-
-### Windows PowerShell
-
-Run these commands from the project root:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe scripts/bootstrap.py
-.\.venv\Scripts\python.exe -m flask --app wsgi init-db
-.\.venv\Scripts\python.exe -m flask --app wsgi create-admin
-.\.venv\Scripts\python.exe -m flask --app wsgi seed-demo
-.\.venv\Scripts\python.exe -m flask --app wsgi run
+Private Subnet 2:
+10.80.2.0/24
+Availability Zone: ap-southeast-2b
 ```
 
-Open http://127.0.0.1:5000.
+### Networking Architecture
 
-Sign in using the administrator account you created. There are no default passwords.
-
-Use **Register** to create a requester account and compare the two roles.
-
-- `bootstrap.py` creates local configuration with a random session secret.
-- `init-db` creates the initial database tables.
-- `create-admin` prompts for administrator credentials.
-- `seed-demo` optionally adds sample tickets.
-
-### Docker
-
-Create your `.env` file using `python scripts/bootstrap.py`, then run:
-
-```bash
-docker compose build
-docker compose run --rm web flask --app wsgi init-db
-docker compose run --rm web flask --app wsgi create-admin
-docker compose run --rm web flask --app wsgi seed-demo
-docker compose up -d
+```mermaid
+flowchart TD
+    A[AWS Cloud - Sydney Region]
+    A --> B[VPC: 10.80.0.0/16]
+    B --> C[Private Subnet 1]
+    B --> D[Private Subnet 2]
+    C --> E[Availability Zone 2a]
+    D --> F[Availability Zone 2b]
+    C --> G[Private Route Table]
+    D --> G
 ```
 
-Open http://127.0.0.1:8000.
+The generated infrastructure uses two private subnets across separate Availability Zones.
 
-SQLite data is stored in a named Docker volume. Running `docker compose down` preserves it; adding `-v` deletes the volume.
+The ticket-specific configuration does not create an Internet Gateway, NAT Gateway, EC2 instance, or RDS database.
 
-## AWS Deployment
-
-Follow [docs/AWS_DEPLOYMENT.md](docs/AWS_DEPLOYMENT.md) for the complete instructions.
-
-The deployment has two stages:
-
-1. **Provision infrastructure** using Terraform.
-2. **Install and configure the application** on EC2 using the supplied scripts.
-
-The Terraform configuration includes:
-
-- VPC and an internet gateway.
-- One public application subnet and two private database subnets.
-- Application and database security groups.
-- EC2 instance with an IAM logging role.
-- Encrypted RDS MySQL with seven-day automated backup retention.
-- CloudWatch log group and infrastructure alarms.
-- SNS email subscription.
-
-Copy `infra/terraform.tfvars.example` to `infra/terraform.tfvars` and configure the required values before running:
-
-```bash
-cd infra
-terraform init
-terraform fmt
-terraform validate
-terraform plan
-terraform apply
-```
-
-Review the plan before confirming deployment. Terraform provisions infrastructure; it does not automatically upload the source or complete application setup.
-
-**AWS resources may incur charges.** Follow the deployment guide's cleanup instructions after testing.
-
-## Monitoring and Recovery
-
-- Application and Gunicorn logs can be forwarded to CloudWatch.
-- The CloudWatch log group retains logs for 14 days.
-- CPU and EC2 status-check alarms publish notifications through SNS.
-- `/health/live` checks application responsiveness.
-- `/health/ready` checks database connectivity.
-- RDS configuration includes automated backups, deletion protection and a final snapshot.
-- A manual snapshot script and recovery runbook are included.
-
-The EC2 alarms monitor infrastructure health; they do not provide application-level HTTP uptime monitoring.
-
-See [docs/BACKUP_RECOVERY.md](docs/BACKUP_RECOVERY.md) for restoration and verification steps.
-
-## Security
-
-- Hashed passwords and authenticated sessions.
-- Server-side requester and administrator access checks.
-- CSRF protection and input validation.
-- Login and registration rate limits.
-- HTML escaping and CSV formula escaping.
-- Secure cookie settings for production HTTPS.
-- Private database networking and encrypted database storage.
-- A restricted runtime database account.
-
-Never commit `.env`, passwords, private SSH keys or Terraform state files. Use `.env.example` and `terraform.tfvars.example` as configuration references.
+---
 
 ## Project Structure
 
-| Path | Purpose |
-| --- | --- |
-| `app/` | Application factory, models, forms and routes |
-| `app/templates/` | Jinja HTML templates |
-| `app/static/` | Application styles |
-| `tests/` | Functional, authorization, security and local recovery tests |
-| `infra/` | Terraform AWS resources and example variables |
-| `scripts/` | Local setup, EC2 installation, RDS setup and logging helpers |
-| `docs/` | Setup, architecture, validation and recovery guides |
-| `.github/workflows/` | Automated test workflow |
-| `Dockerfile` | Container image configuration |
-| `compose.yaml` | Local container runtime configuration |
-| `wsgi.py` | Application entry point |
+```text
+CloudDesk_v2/
+│
+├── app/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── forms.py
+│   ├── routes.py
+│   ├── provisioning.py
+│   ├── templates/
+│   └── static/
+│
+├── provisioning/
+│   └── aws-vpc/
+│       └── main.tf
+│
+├── infra/
+│   └── main.tf
+│
+├── instance/
+│   ├── cloud_desk.db
+│   └── provisioning/
+│
+├── scripts/
+│
+├── docs/
+│
+├── tests/
+│
+├── requirements.txt
+├── requirements-dev.txt
+├── START_WINDOWS.bat
+├── .env.example
+├── Dockerfile
+└── wsgi.py
+```
+
+The `instance` directory contains local application data and Terraform working files. It should not be committed to GitHub.
+
+---
+
+## Local Installation
+
+### Prerequisites
+
+Install:
+
+- Python 3.11 or 3.12
+- Git
+- VS Code or another editor
+
+For live AWS provisioning, also install:
+
+- Terraform CLI
+- AWS CLI
+- AWS account with appropriate permissions
+
+### Step 1: Clone Repository
+
+```bash
+git clone https://github.com/ManikaR26/cloud-desk.git
+```
+
+```bash
+cd cloud-desk
+```
+
+Make sure you are using the updated CloudDesk v2 source code containing the Terraform automation feature.
+
+### Step 2: Install Dependencies
+
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate it on Windows:
+
+```cmd
+.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### Step 3: Configure Environment Variables
+
+Create a `.env` file in the project root.
+
+Example configuration:
+
+```env
+SECRET_KEY=GENERATE_A_PRIVATE_RANDOM_SECRET
+DATABASE_URL=sqlite:///cloud_desk.db
+APP_ENV=development
+COOKIE_SECURE=false
+
+PROVISIONING_MODE=preview
+PROVISIONING_REGION=ap-southeast-2
+AUTO_RUN_PROVISIONING=true
+```
+
+Never commit your actual `.env` file or AWS credentials to GitHub.
+
+### Step 4: Start CloudDesk
+
+On Windows, use the included startup script:
+
+```cmd
+START_WINDOWS.bat
+```
+
+The script performs local setup and starts the Flask development server.
+
+Expected output:
+
+```text
+* Serving Flask app 'wsgi'
+* Running on http://127.0.0.1:5000
+```
+
+Open:
+
+http://127.0.0.1:5000
+
+---
+
+## Configure AWS Authentication
+
+For live infrastructure provisioning, configure an authenticated AWS CLI profile.
+
+### Step 1: Authenticate
+
+```cmd
+aws login --profile clouddesk --region ap-southeast-2
+```
+
+Complete the browser-based AWS authentication.
+
+### Step 2: Configure Region
+
+```cmd
+aws configure set region ap-southeast-2 --profile clouddesk
+```
+
+### Step 3: Verify AWS Identity
+
+```cmd
+aws sts get-caller-identity --profile clouddesk
+```
+
+This retrieves the AWS account and authenticated identity information.
+
+### Step 4: Configure Terraform Credentials
+
+If Terraform cannot directly consume the AWS CLI login credentials, configure a credential-process profile:
+
+```cmd
+aws configure set credential_process "aws configure export-credentials --profile clouddesk --format process" --profile clouddesk-terraform
+```
+
+```cmd
+aws configure set region ap-southeast-2 --profile clouddesk-terraform
+```
+
+Verify:
+
+```cmd
+aws sts get-caller-identity --profile clouddesk-terraform
+```
+
+Select this profile before starting CloudDesk:
+
+```cmd
+set "AWS_PROFILE=clouddesk-terraform"
+```
+
+Terraform can now request temporary credentials through the configured AWS CLI profile.
+
+---
+
+## Terraform Workflow
+
+Terraform uses Infrastructure as Code to manage AWS resources.
+
+### 1. Initialize
+
+```bash
+terraform init
+```
+
+Initializes the Terraform working directory and installs required provider plugins.
+
+### 2. Validate
+
+```bash
+terraform validate
+```
+
+Checks whether the Terraform configuration is syntactically and structurally valid.
+
+### 3. Plan
+
+```bash
+terraform plan
+```
+
+Previews infrastructure changes before execution.
+
+Example output from the verified VPC configuration:
+
+```text
+Plan: 6 to add, 0 to change, 0 to destroy.
+```
+
+### 4. Apply
+
+```bash
+terraform apply
+```
+
+Provisions the defined infrastructure after confirmation.
+
+In CloudDesk's live automation workflow, Terraform is executed by the provisioning backend after administrator approval.
+
+Manual `terraform apply` is not necessary for the normal automated approval workflow.
+
+---
+
+## Verified AWS Deployment
+
+The automated VPC provisioning workflow was successfully tested on October 26, 2026.
+
+### Test Configuration
+
+```text
+Ticket ID: REQ-0004
+
+AWS Region:
+ap-southeast-2
+
+VPC CIDR:
+10.80.0.0/16
+
+Provisioning Mode:
+AWS Live
+```
+
+### Result
+
+```text
+Provisioning Status: Succeeded
+
+VPC ID:
+vpc-03d4cd3a06d1009c7
+
+VPC State:
+Available
+```
+
+### Verification
+
+The provisioned VPC was independently verified through:
+
+AWS Management Console → VPC → Your VPCs
+
+The successfully created VPC demonstrated the complete workflow from employee request to real AWS infrastructure provisioning.
+
+**Note:** This verifies Terraform-based AWS VPC creation. It does not mean the Flask web application itself has been deployed to EC2.
+
+---
+
+## Database Design
+
+CloudDesk uses SQLite for local data storage and SQLAlchemy as its Object-Relational Mapping (ORM) library.
+
+The database supports:
+
+- User accounts
+- Role-based permissions
+- Service requests
+- Ticket assignments
+- Ticket statuses
+- Comments
+- Activity history
+- Infrastructure provisioning jobs
+- AWS resource identifiers
+
+### Example SQLAlchemy Operation
+
+```python
+ticket = Ticket(
+    title="AWS VPC Request",
+    status="Open",
+    user_id=2
+)
+
+db.session.add(ticket)
+db.session.commit()
+```
+
+SQLAlchemy translates ORM operations into SQL statements executed by the configured database engine.
+
+MySQL is supported through separate application and AWS hosting configurations, but SQLite was used for the verified local workflow.
+
+---
+
+## Security Features
+
+CloudDesk includes:
+
+- Password hashing.
+- Role-based access control.
+- Administrator-only infrastructure approval.
+- CSRF protection.
+- Session-based authentication.
+- Input validation.
+- Login throttling.
+- Security headers.
+- Separate Terraform working directories for requests.
+- AWS authentication using temporary credentials.
+- Preview mode to avoid unnecessary infrastructure provisioning.
+
+AWS credentials and Terraform state files must be stored securely and excluded from version control.
+
+For production use, the provisioning identity should have restricted IAM permissions.
+
+---
 
 ## Testing
 
-Run the test suite from the project root:
+The upgraded CloudDesk application passed 16 automated local tests covering application behavior and provisioning workflows.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+Run the test suite:
+
+```cmd
+.venv\Scripts\python.exe -m pytest -q
 ```
 
-The initial local test run completed with **12 passing tests** covering authentication, access restrictions, ticket updates, stale-update conflicts, comment escaping, CSV filtering, CSRF, security headers, CLI setup and a SQLite backup round trip.
+### Additional Manual Testing
 
-The GitHub Actions workflow runs Python tests on pushes and pull requests. It does not deploy the application.
+The following workflow was tested:
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for the checks performed and remaining validation work.
+1. Employee account login.
+2. Creation of an AWS VPC request.
+3. Administrator assignment and approval.
+4. Terraform provisioning job execution.
+5. AWS authentication and provider initialization.
+6. Live AWS infrastructure creation.
+7. Provisioning status tracking.
+8. AWS VPC verification through the AWS Console.
+
+---
+
+## Troubleshooting
+
+During implementation, AWS provisioning initially failed because Terraform could not access valid AWS credentials.
+
+The error included:
+
+```text
+Error: No valid credential sources found
+```
+
+The issue was resolved by configuring an AWS CLI credential-process profile and verifying Terraform authentication.
+
+Another issue involved insufficient local disk space during provider installation and AWS authentication cache operations.
+
+Terraform's temporary working directory was moved to a drive with adequate storage.
+
+These issues were resolved before the successful live VPC provisioning test.
+
+---
 
 ## Current Limitations
 
-This is a learning and portfolio application.
+CloudDesk is designed as a cloud engineering portfolio and learning project.
 
-- Live AWS deployment, RDS integration, Docker execution and RDS restoration remain unvalidated.
-- The AWS design uses one EC2 instance and a single-AZ RDS database.
-- The application uses one Gunicorn worker with threads.
-- Rate limiting is process-local; multiple workers or replicas require shared storage.
-- Activity history is application-level and is not tamper-proof.
-- Email verification, password reset, attachments, SLA tracking and SSO are not implemented.
-- `init-db` creates initial tables; it is not a database migration system.
-- The AWS demonstration uses a self-signed HTTPS certificate and IP-restricted access.
+Current limitations include:
 
-## Future Improvements
+- AWS IAM access is not automatically granted to employees.
+- Employee email notifications are not implemented.
+- Automated provisioning currently focuses on AWS VPC resources.
+- Provisioning jobs use a local background execution mechanism rather than a durable production job queue.
+- Terraform state is stored locally.
+- The complete EC2 and RDS application-hosting architecture has not been validated end-to-end.
+- Failed provisioning jobs require administrator troubleshooting rather than automatic retries.
 
-- Alembic database migrations.
-- Email verification and password reset.
-- Trusted HTTPS certificates and a public domain.
-- Shared rate-limit storage.
-- Application-level uptime monitoring.
-- Attachment storage and SLA tracking.
-- Automated deployment and cloud integration tests.
-- Multiple application instances and a highly available database design.
+---
+
+## Future Enhancements
+
+- Employee notifications after infrastructure creation.
+- Restricted AWS IAM access provisioning.
+- Automated infrastructure deletion with administrator approval.
+- Remote Terraform state storage and locking.
+- Dedicated background job processing.
+- Additional AWS resources such as EC2 and S3.
+- CloudWatch-based provisioning monitoring.
+- Automated cloud integration tests.
+
+---
+
+## Project Outcome
+
+CloudDesk demonstrates the integration of backend development, database management, cloud infrastructure, and Infrastructure as Code.
+
+The project successfully implements:
+
+- A Flask-based service request management application.
+- Role-based employee and administrator workflows.
+- SQLAlchemy-based database management.
+- Admin-approved Terraform automation.
+- Real AWS VPC provisioning.
+- Infrastructure execution status tracking.
+- AWS resource verification.
+
+The successful AWS VPC deployment confirms that the application can automatically provision cloud networking infrastructure after administrator approval.
+
+---
+
+## Author
+
+**Manika Rattan**
+
+B.E. Computer Science and Engineering  
+Thapar Institute of Engineering & Technology
+
+GitHub: [ManikaR26](https://github.com/ManikaR26)
+
+---
+
+**CloudDesk — From Employee Service Requests to Automated AWS Infrastructure Provisioning.**
